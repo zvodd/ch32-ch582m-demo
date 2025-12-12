@@ -27,19 +27,25 @@ uint8_t KeyBuf[8] = {0};
  * This replaces the missing library function.
  */
 uint16_t TouchKey_Get(uint8_t ch) {
-    // 1. Select channel and Power On
-    // R32_TKEY_CTRL bits 0-4 are channel, bit 24 is Power
-    R32_TKEY_CTRL = (ch & 0x1F) | (1 << 24);
+    // 1. Select the ADC channel (TouchKey pins are shared with ADC channels)
+    // R8_ADC_CHANNEL bits 0-3 select the channel
+    R8_ADC_CHANNEL = (ch & RB_ADC_CH_INX);
 
-    // 2. Wait for completion flag
-    // On CH582, we poll the TKEY Interrupt Flag register
-    while (!(R8_TKEY_INT_FLAG & RB_TKEY_IF_END));
+    // 2. Ensure TouchKey power is ON
+    // This can also be done once in an Init function to save time
+    R8_TKEY_CFG |= RB_TKEY_PWR_ON;
 
-    // 3. Clear flag for next read
-    R8_TKEY_INT_FLAG = RB_TKEY_IF_END;
+    // 3. Start the TouchKey conversion
+    // Writing RB_TKEY_START (0x01) to R8_TKEY_CONVERT triggers the measurement
+    R8_TKEY_CONVERT = RB_TKEY_START;
 
-    // 4. Return result (16-bit count)
-    return R16_TKEY_CNT;
+    // 4. Wait for completion flag
+    // The SDK notes that RB_ADC_IF_EOC in R8_ADC_INT_FLAG is set when TKEY finishes
+    while (!(R8_ADC_INT_FLAG & RB_ADC_IF_EOC));
+
+    // 5. Return the result
+    // The 12-bit (or 16-bit internal) count is stored in the ADC data register
+    return (R16_ADC_DATA & RB_ADC_DATA);
 }
 
 /**
