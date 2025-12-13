@@ -375,7 +375,7 @@ void USB_IRQHandler(void) {
 // ====================================================================
 
 void Touch_Setup() {
-    GPIOA_ModeCfg(GPIO_Pin_10 | GPIO_Pin_12 | GPIO_Pin_14, GPIO_ModeIN_Floating);
+    GPIOA_ModeCfg(GPIO_Pin_12 | GPIO_Pin_14, GPIO_ModeIN_Floating);
     
     TouchKey_ChSampInit(); 
     
@@ -412,7 +412,7 @@ int main() {
     
     Touch_Setup();
     printf("Begin MainLoop");
-    int cc = 0;
+
     
     while(1) {
         uint8_t current_pressed = 0;
@@ -451,10 +451,5 @@ int main() {
         }
         
         mDelaymS(10);
-        cc++;
-        if (cc > 300){
-            printf("hi");
-            cc = 0;
-        }
     }
 }
