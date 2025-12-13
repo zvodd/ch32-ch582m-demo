@@ -140,11 +140,12 @@ uint8_t HIDInOutData[DevEP0SIZE] = { 0 }; // Unused, but keep for completeness
 #endif
 
 // --- Your Original Variables ---
-#define TOUCH_THRES 1000
+#define TOUCH_THRES 140
 #define TOUCH_BASE_SAMPLES 8
 const uint8_t tkey_ch[] = { 2, 4 }; 
-const uint8_t key_map[] = { 0x04, 0x05 }; // A, B, C
-uint16_t base_cal[3] = {0};
+const uint8_t key_map[] = { 0x04, 0x05 }; // A, B
+#define NUM_KEYS (sizeof(tkey_ch)/sizeof(tkey_ch[0]))
+uint16_t base_cal[sizeof(tkey_ch)/sizeof(tkey_ch[0])] = {0};
 uint8_t KeyBuf[8] = {0};
 
 /**
@@ -381,7 +382,7 @@ void Touch_Setup() {
     
     // Initial Calibration
     mDelaymS(100);
-    for(int k=0; k<3; k++) {
+    for(int k=0; k<NUM_KEYS; k++) {
         uint32_t sum = 0;
         for(int j=0; j<TOUCH_BASE_SAMPLES; j++) {
             sum += TouchKey_Get(tkey_ch[k]);
@@ -418,16 +419,16 @@ int main() {
         uint8_t current_pressed = 0;
         static uint8_t last_pressed = 0;
         
-        for(int i=0; i<3; i++) {
+        for(int i=0; i<NUM_KEYS; i++) {
             uint16_t val = TouchKey_Get(tkey_ch[i]);
-       
 
-            // Print the raw values for all three channels
-            printf("CH%d: Base=%d, Current=%d, Diff=%d\n", 
+            // Print the raw values for each channel
+            printf("CH%d -)) Base=[ %d ], Current=[ %d ], Diff=[ %d ]\n", 
                 tkey_ch[i], 
                 base_cal[i], 
                 val, 
                 (base_cal[i] - val));
+
             if (val < (base_cal[i] - TOUCH_THRES)) {
                 current_pressed = key_map[i];
                 if (last_pressed == 0) {
@@ -437,13 +438,16 @@ int main() {
             }
         }
 
-        // HID Keyboard Logic: Send Key Down, then Key Up when released
+        // HID Keyboard Logic: send key change immediately
         if (current_pressed != last_pressed) {
-            // KeyBuf is mapped to pEP1_RAM_Addr
-            // KeyBuf[0] = Modifiers, KeyBuf[1] = Reserved, KeyBuf[2] = Key Code
+            // Build report: modifiers=0, reserved=0, keycode in slot 0 (KeyBuf[2])
+            KeyBuf[0] = 0;
+            KeyBuf[1] = 0;
             KeyBuf[2] = current_pressed; 
+            // zero remaining key slots for good measure
+            KeyBuf[3] = KeyBuf[4] = KeyBuf[5] = KeyBuf[6] = KeyBuf[7] = 0;
             
-            // Check if EP1 is NAK (ready to receive new data)
+            // Send when EP1 is ready (T endpoint result == NAK -> ready to load/send)
             if ((R8_UEP1_CTRL & UEP_T_RES_MASK) == UEP_T_RES_NAK) {
                 DevEP1_IN_Transmit(8);
             }
