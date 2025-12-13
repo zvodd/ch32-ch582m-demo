@@ -1,4 +1,5 @@
 #include "CH58x_common.h"
+#include "debug.h"
 
 // NOTE: We don't need #include "usb_desc.h" anymore
 // because we are defining the descriptors and handlers in this file.
@@ -141,8 +142,8 @@ uint8_t HIDInOutData[DevEP0SIZE] = { 0 }; // Unused, but keep for completeness
 // --- Your Original Variables ---
 #define TOUCH_THRES 1000
 #define TOUCH_BASE_SAMPLES 8
-const uint8_t tkey_ch[] = { 3, 5, 7 }; 
-const uint8_t key_map[] = { 0x04, 0x05, 0x06 }; // A, B, C
+const uint8_t tkey_ch[] = { 2, 4 }; 
+const uint8_t key_map[] = { 0x04, 0x05 }; // A, B, C
 uint16_t base_cal[3] = {0};
 uint8_t KeyBuf[8] = {0};
 
@@ -393,6 +394,8 @@ void Touch_Setup() {
 int main() {
     // Set system clock
     SetSysClock(CLK_SOURCE_PLL_60MHz);
+
+    DebugInit();
     
     // LED Init
     GPIOB_ModeCfg(LED_PIN, GPIO_ModeOut_PP_5mA);
@@ -408,6 +411,8 @@ int main() {
     PFIC_EnableIRQ(USB_IRQn);
     
     Touch_Setup();
+    printf("Begin MainLoop");
+    int cc = 0;
     
     while(1) {
         uint8_t current_pressed = 0;
@@ -415,7 +420,14 @@ int main() {
         
         for(int i=0; i<3; i++) {
             uint16_t val = TouchKey_Get(tkey_ch[i]);
-            
+       
+
+            // Print the raw values for all three channels
+            printf("CH%d: Base=%d, Current=%d, Diff=%d\n", 
+                tkey_ch[i], 
+                base_cal[i], 
+                val, 
+                (base_cal[i] - val));
             if (val < (base_cal[i] - TOUCH_THRES)) {
                 current_pressed = key_map[i];
                 if (last_pressed == 0) {
@@ -438,6 +450,11 @@ int main() {
             last_pressed = current_pressed;
         }
         
-        mDelaymS(10); 
+        mDelaymS(10);
+        cc++;
+        if (cc > 300){
+            printf("hi");
+            cc = 0;
+        }
     }
 }
