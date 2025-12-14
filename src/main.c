@@ -1,119 +1,12 @@
 #include "CH58x_common.h"
+
+// NOTE: Initialisation for UART0 and __write() redirection for printf()
 #include "debug.h"
 
-// NOTE: We don't need #include "usb_desc.h" anymore
-// because we are defining the descriptors and handlers in this file.
+// NOTE: USB descriptors and definitions:
+#include "usb_defs.h"
+#include "usb_descriptors.h"
 
-// ====================================================================
-// === DESCRIPTOR AND EP0 FRAMEWORK DEFINITIONS (Adapted from Sample) ===
-// ====================================================================
-
-#define DevEP0SIZE 0x40 // Endpoint 0 max packet size (64 bytes)
-
-// --- USB Descriptors (Adapted for CH582M) ---
-// Note: We are switching back to a standard 8-byte Keyboard Report Descriptor.
-
-const uint8_t MyDevDescr[] = {
-    0x12,       // bLength
-    0x01,       // bDescriptorType = Device
-    0x10, 0x01, // bcdUSB = 1.10
-    0x00,       // bDeviceClass (defined per-interface)
-    0x00,       // bDeviceSubClass
-    0x00,       // bDeviceProtocol
-    DevEP0SIZE, // bMaxPacketSize0 (usually 8 or 64)
-    0x34, 0x12, // idVendor (example generic VID 0x1234)
-    0x78, 0x56, // idProduct (example generic PID 0x5678)
-    0x00, 0x01, // bcdDevice
-    0x01,       // iManufacturer
-    0x02,       // iProduct
-    0x03,       // iSerialNumber
-    0x01        // bNumConfigurations
-};
-
-// Configuration Descriptor (Keyboard with 1 endpoint)
-const uint8_t MyCfgDescr[] = {
-    // --- Configuration Header ---
-    0x09,       // bLength
-    0x02,       // bDescriptorType = Configuration
-    0x22, 0x00, // wTotalLength = 34 bytes
-    0x01,       // bNumInterfaces
-    0x01,       // bConfigurationValue
-    0x00,       // iConfiguration
-    0xA0,       // bmAttributes = Bus powered + Remote Wakeup
-    0x32,       // bMaxPower = 100 mA
-
-    // --- Interface 0: HID Boot Keyboard ---
-    0x09,       // bLength
-    0x04,       // bDescriptorType = Interface
-    0x00,       // bInterfaceNumber
-    0x00,       // bAlternateSetting
-    0x01,       // bNumEndpoints = 1
-    0x03,       // bInterfaceClass = HID
-    0x01,       // bInterfaceSubClass = Boot
-    0x01,       // bInterfaceProtocol = Keyboard
-    0x00,       // iInterface
-
-    // --- HID Descriptor ---
-    0x09,       // bLength
-    0x21,       // bDescriptorType = HID
-    0x11, 0x01, // bcdHID = 1.11
-    0x00,       // bCountryCode = Not localized
-    0x01,       // bNumDescriptors
-    0x22,       // bDescriptorType = Report
-    0x3F, 0x00, // wDescriptorLength = 63 bytes (fixed below)
-
-    // --- Endpoint Descriptor (IN interrupt) ---
-    0x07,       // bLength
-    0x05,       // bDescriptorType = Endpoint
-    0x81,       // bEndpointAddress = IN endpoint #1
-    0x03,       // bmAttributes = Interrupt
-    0x08, 0x00, // wMaxPacketSize = 8 bytes
-    0x0A        // bInterval = 10 ms
-};
-
-
-// Standard HID Keyboard Report Descriptor (8-byte report)
-const uint8_t MyHIDReportDescr[] = {
-    0x05, 0x01,  // Usage Page (Generic Desktop)
-    0x09, 0x06,  // Usage (Keyboard)
-    0xA1, 0x01,  // Collection (Application)
-    0x05, 0x07,  //   Usage Page (Keyboard)(Key Codes)
-    0x19, 0xE0,  //   Usage Minimum (224)
-    0x29, 0xE7,  //   Usage Maximum (231)
-    0x15, 0x00,  //   Logical Minimum (0)
-    0x25, 0x01,  //   Logical Maximum (1)
-    0x75, 0x01,  //   Report Size (1)
-    0x95, 0x08,  //   Report Count (8)
-    0x81, 0x02,  //   Input (Data, Var, Abs) ; Modifier byte
-    0x95, 0x01,  //   Report Count (1)
-    0x75, 0x08,  //   Report Size (8)
-    0x81, 0x01,  //   Input (Const) ; Reserved byte
-    0x95, 0x05,  //   Report Count (5)
-    0x75, 0x01,  //   Report Size (1)
-    0x05, 0x08,  //   Usage Page (LEDs)
-    0x19, 0x01,  //   Usage Minimum (1)
-    0x29, 0x05,  //   Usage Maximum (5)
-    0x91, 0x02,  //   Output (Data, Var, Abs) ; 5 LEDs
-    0x95, 0x01,  //   Report Count (1)
-    0x75, 0x03,  //   Report Size (3)
-    0x91, 0x01,  //   Output (Const) ; LED padding
-    0x95, 0x06,  //   Report Count (6)
-    0x75, 0x08,  //   Report Size (8)
-    0x15, 0x00,  //   Logical Minimum (0)
-    0x25, 0x65,  //   Logical Maximum (101)
-    0x05, 0x07,  //   Usage Page (Keyboard)
-    0x19, 0x00,  //   Usage Minimum (0)
-    0x29, 0x65,  //   Usage Maximum (101)
-    0x81, 0x00,  //   Input (Data, Array) ; 6 keycodes
-    0xC0         // End Collection
-};
-
-
-// String Descriptors
-const uint8_t MyLangDescr[] = { 0x04, 0x03, 0x09, 0x04 }; // Language 0x0409 (US English)
-const uint8_t MyManuInfo[] = { 0x10, 0x03,'G',0,'e',0,'n',0,'e',0,'r',0,'i',0,'c',0 };
-
-const uint8_t MyProdInfo[] = { 0x12, 0x03,'U',0,'S',0,'B',0,' ',0,'K',0,'e',0,'y',0,'b',0,'d',0 };
 
 
 // --- Global Variables (Adapted for CH582M) ---
@@ -123,8 +16,8 @@ uint16_t SetupReqLen;
 const uint8_t *pDescr;
 
 // EP0 setup packet buffer (Needed as pSetupReqPak is usually an alias to this)
-__attribute__((aligned(4))) uint8_t UsbSetupBuf[8]; 
-#define pSetupReqPak ((USB_SETUP_REQ *)UsbSetupBuf) 
+__attribute__((aligned(4))) uint8_t UsbSetupBuf[8];
+#define pSetupReqPak ((USB_SETUP_REQ *)UsbSetupBuf)
 
 // User-allocated RAM (The CH582M has fewer EPs, so we simplify)
 __attribute__((aligned(4))) uint8_t EP0_Databuf[64]; // EP0
@@ -135,14 +28,12 @@ uint8_t HIDInOutData[DevEP0SIZE] = { 0 }; // Unused, but keep for completeness
 
 // Define the LED pin as PB4
 #define LED_PIN GPIO_Pin_4
-#ifndef UEP_T_RES_MASK
-#define UEP_T_RES_MASK 0x03
-#endif
+
 
 // --- Your Original Variables ---
 #define TOUCH_THRES 140
 #define TOUCH_BASE_SAMPLES 8
-const uint8_t tkey_ch[] = { 2, 4 }; 
+const uint8_t tkey_ch[] = { 2, 4 };
 const uint8_t key_map[] = { 0x04, 0x05 }; // A, B
 #define NUM_KEYS (sizeof(tkey_ch)/sizeof(tkey_ch[0]))
 uint16_t base_cal[sizeof(tkey_ch)/sizeof(tkey_ch[0])] = {0};
@@ -196,7 +87,7 @@ void USB_DevTransProcess( void )
                     switch ( SetupReqCode )
                     {
                         case USB_GET_DESCRIPTOR:
-                            len = SetupReqLen >= DevEP0SIZE ? DevEP0SIZE : SetupReqLen; 
+                            len = SetupReqLen >= DevEP0SIZE ? DevEP0SIZE : SetupReqLen;
                             memcpy( pEP0_RAM_Addr, pDescr, len ); /* Load upload data */
                             SetupReqLen -= len;
                             pDescr += len;
@@ -208,7 +99,7 @@ void USB_DevTransProcess( void )
                             R8_UEP0_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK;
                             break;
                         default:
-                            R8_UEP0_T_LEN = 0; 
+                            R8_UEP0_T_LEN = 0;
                             R8_UEP0_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK;
                             break;
                     }
@@ -217,37 +108,37 @@ void USB_DevTransProcess( void )
                 case UIS_TOKEN_OUT | 0: // Endpoint 0 OUT (Status stage)
                     // The joystick example had LED control here, but for now we just ACK/NAK status
                     R8_UEP0_T_LEN = 0;
-                    R8_UEP0_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK; 
+                    R8_UEP0_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK;
                     break;
-                    
+
                 // --- Your Keyboard Endpoint ---
                 case UIS_TOKEN_IN | 1 : // Endpoint 1 IN
                     // Toggle the PID and set back to NAK after sending one packet
-                    R8_UEP1_CTRL ^= RB_UEP_T_TOG; 
+                    R8_UEP1_CTRL ^= RB_UEP_T_TOG;
                     R8_UEP1_CTRL = ( R8_UEP1_CTRL & ~UEP_T_RES_MASK ) | UEP_T_RES_NAK;
                     break;
                 // No need for Endpoint 1 OUT (unless you want LED feedback)
             }
             R8_USB_INT_FG = RB_UIF_TRANSFER; // Clear Interrupt Flag
         }
-        
+
         // --- SETUP Transaction on Endpoint 0 ---
         if ( R8_USB_INT_ST & RB_UIS_SETUP_ACT )
         {
             // Set EP0 to ACK both IN/OUT, and set PID to DATA1 for the next transfer
             R8_UEP0_CTRL = RB_UEP_R_TOG | RB_UEP_T_TOG | UEP_R_RES_ACK | UEP_T_RES_NAK;
-            
+
             // Copy setup packet from hardware buffer to UsbSetupBuf (pEP0_RAM_Addr is often mapped to UsbSetupBuf)
             memcpy(UsbSetupBuf, pEP0_RAM_Addr, 8);
-            
+
             SetupReqLen = pSetupReqPak->wLength;
             SetupReqCode = pSetupReqPak->bRequest;
             chtype = pSetupReqPak->bRequestType;
 
             len = 0;
             errflag = 0;
-            
-            if ( ( chtype & USB_REQ_TYP_MASK ) == USB_REQ_TYP_STANDARD ) 
+
+            if ( ( chtype & USB_REQ_TYP_MASK ) == USB_REQ_TYP_STANDARD )
             {
                 switch ( SetupReqCode )
                 {
@@ -300,14 +191,14 @@ void USB_DevTransProcess( void )
                         break;
                     case USB_CLEAR_FEATURE :
                         // Endpoint 1 stall clear (required for robust USB)
-                        if ( ( (pSetupReqPak->wIndex) & 0xff ) == 0x81 ) 
+                        if ( ( (pSetupReqPak->wIndex) & 0xff ) == 0x81 )
                             R8_UEP1_CTRL = ( R8_UEP1_CTRL & ~( RB_UEP_T_TOG | MASK_UEP_T_RES ) ) | UEP_T_RES_NAK;
                         break;
                     case USB_GET_INTERFACE :
                     case USB_GET_STATUS :
                     case USB_GET_CONFIGURATION :
                         // Simple requests are handled implicitly or with a short response
-                        len = 0; 
+                        len = 0;
                         break;
                     default :
                         errflag = 0xff;
@@ -329,7 +220,7 @@ void USB_DevTransProcess( void )
                 // Prepare for the data stage (send data if IN request)
                 if ( chtype & 0x80 ) len = ( SetupReqLen > DevEP0SIZE ) ? DevEP0SIZE : SetupReqLen;
                 else len = 0; // OUT request (Status stage)
-                
+
                 R8_UEP0_T_LEN = len;
                 R8_UEP0_CTRL = RB_UEP_R_TOG | RB_UEP_T_TOG | UEP_R_RES_ACK | UEP_T_RES_ACK;
             }
@@ -343,7 +234,7 @@ void USB_DevTransProcess( void )
         R8_USB_DEV_AD = 0;
         // Reset all endpoints to ACK/NAK
         R8_UEP0_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK;
-        R8_UEP1_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK | RB_UEP_AUTO_TOG; 
+        R8_UEP1_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK | RB_UEP_AUTO_TOG;
         R8_USB_INT_FG = RB_UIF_BUS_RST;
     }
     // --- Suspend ---
@@ -377,9 +268,9 @@ void USB_IRQHandler(void) {
 
 void Touch_Setup() {
     GPIOA_ModeCfg(GPIO_Pin_12 | GPIO_Pin_14, GPIO_ModeIN_Floating);
-    
-    TouchKey_ChSampInit(); 
-    
+
+    TouchKey_ChSampInit();
+
     // Initial Calibration
     mDelaymS(100);
     for(int k=0; k<NUM_KEYS; k++) {
@@ -397,36 +288,36 @@ int main() {
     SetSysClock(CLK_SOURCE_PLL_60MHz);
 
     DebugInit();
-    
+
     // LED Init
     GPIOB_ModeCfg(LED_PIN, GPIO_ModeOut_PP_5mA);
 
     // USB Init
     pEP0_RAM_Addr = EP0_Databuf; // Map EP0 data buffer
     pEP1_RAM_Addr = KeyBuf; // Map KeyBuf as EP1 TX buffer (Direct access is easier)
-    
+
     // Initialize USB hardware
-    USB_DeviceInit(); 
-    
+    USB_DeviceInit();
+
     // Enable USB Interrupt
     PFIC_EnableIRQ(USB_IRQn);
-    
+
     Touch_Setup();
     printf("Begin MainLoop");
 
-    
+
     while(1) {
         uint8_t current_pressed = 0;
         static uint8_t last_pressed = 0;
-        
+
         for(int i=0; i<NUM_KEYS; i++) {
             uint16_t val = TouchKey_Get(tkey_ch[i]);
 
             // Print the raw values for each channel
-            printf("CH%d -)) Base=[ %d ], Current=[ %d ], Diff=[ %d ]\n", 
-                tkey_ch[i], 
-                base_cal[i], 
-                val, 
+            printf("CH%d -)) Base=[ %d ], Current=[ %d ], Diff=[ %d ]\n",
+                tkey_ch[i],
+                base_cal[i],
+                val,
                 (base_cal[i] - val));
 
             if (val < (base_cal[i] - TOUCH_THRES)) {
@@ -443,17 +334,17 @@ int main() {
             // Build report: modifiers=0, reserved=0, keycode in slot 0 (KeyBuf[2])
             KeyBuf[0] = 0;
             KeyBuf[1] = 0;
-            KeyBuf[2] = current_pressed; 
+            KeyBuf[2] = current_pressed;
             // zero remaining key slots for good measure
             KeyBuf[3] = KeyBuf[4] = KeyBuf[5] = KeyBuf[6] = KeyBuf[7] = 0;
-            
+
             // Send when EP1 is ready (T endpoint result == NAK -> ready to load/send)
             if ((R8_UEP1_CTRL & UEP_T_RES_MASK) == UEP_T_RES_NAK) {
                 DevEP1_IN_Transmit(8);
             }
             last_pressed = current_pressed;
         }
-        
+
         mDelaymS(10);
     }
 }
