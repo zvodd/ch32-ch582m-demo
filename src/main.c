@@ -33,8 +33,8 @@ uint8_t HIDInOutData[DevEP0SIZE] = { 0 }; // Unused, but keep for completeness
 // --- Your Original Variables ---
 #define TOUCH_THRES 140
 #define TOUCH_BASE_SAMPLES 8
-const uint8_t tkey_ch[] = { 2, 4 };
-const uint8_t key_map[] = { 0x04, 0x05 }; // A, B
+const uint8_t tkey_ch[] = { 5, 2, 4 };
+const uint8_t key_map[] = { 0x04, 0x05, 0x06 }; // A, B, C
 #define NUM_KEYS (sizeof(tkey_ch)/sizeof(tkey_ch[0]))
 uint16_t base_cal[sizeof(tkey_ch)/sizeof(tkey_ch[0])] = {0};
 uint8_t KeyBuf[8] = {0};
@@ -267,7 +267,7 @@ void USB_IRQHandler(void) {
 // ====================================================================
 
 void Touch_Setup() {
-    GPIOA_ModeCfg(GPIO_Pin_12 | GPIO_Pin_14, GPIO_ModeIN_Floating);
+    GPIOA_ModeCfg(GPIO_Pin_12 | GPIO_Pin_14 | GPIO_Pin_15, GPIO_ModeIN_Floating);
 
     TouchKey_ChSampInit();
 
@@ -305,7 +305,7 @@ int main() {
     Touch_Setup();
     printf("Begin MainLoop");
 
-
+    int flag_did_trasmit = 0;
     while(1) {
         uint8_t current_pressed = 0;
         static uint8_t last_pressed = 0;
@@ -341,8 +341,14 @@ int main() {
             // Send when EP1 is ready (T endpoint result == NAK -> ready to load/send)
             if ((R8_UEP1_CTRL & UEP_T_RES_MASK) == UEP_T_RES_NAK) {
                 DevEP1_IN_Transmit(8);
+                flag_did_trasmit = 1;
             }
             last_pressed = current_pressed;
+        }
+
+        if (flag_did_trasmit){
+            printf("\n\nUSB Transmitt occured!\n--------------------------------\n");
+            flag_did_trasmit = 0;
         }
 
         mDelaymS(10);
