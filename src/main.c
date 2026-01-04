@@ -23,6 +23,7 @@ __attribute__((aligned(4))) uint8_t UsbSetupBuf[8];
 __attribute__((aligned(4))) uint8_t EP0_Databuf[64]; // EP0
 __attribute__((aligned(4))) uint8_t EP1_Databuf[8 + 8]; // EP1 IN (8) + OUT (8) - We only need IN
 uint8_t HIDInOutData[DevEP0SIZE] = { 0 }; // Unused, but keep for completeness
+#define EP1_TX_Buf (EP1_Databuf)  // TX buffer for EP1
 
 // --- Helper Functions and Macros ---
 
@@ -36,8 +37,8 @@ uint8_t HIDInOutData[DevEP0SIZE] = { 0 }; // Unused, but keep for completeness
 const uint8_t tkey_ch[] = { 5, 2, 4 };
 const uint8_t key_map[] = { 0x04, 0x05, 0x06 }; // A, B, C
 #define NUM_KEYS (sizeof(tkey_ch)/sizeof(tkey_ch[0]))
-uint16_t base_cal[sizeof(tkey_ch)/sizeof(tkey_ch[0])] = {0};
-uint8_t KeyBuf[8] = {0};
+uint16_t base_cal[NUM_KEYS] = {0};
+uint8_t KeyBuf[8] = {0, 0, 0, 0, 0, 0, 0, 0}; // Working buffer for keyboard data - fully initialized
 
 /**
  * Direct Register Implementation of Touch Reading
@@ -294,7 +295,7 @@ int main() {
 
     // USB Init
     pEP0_RAM_Addr = EP0_Databuf; // Map EP0 data buffer
-    pEP1_RAM_Addr = KeyBuf; // Map KeyBuf as EP1 TX buffer (Direct access is easier)
+    pEP1_RAM_Addr = EP1_TX_Buf; // Map EP1 TX buffer to properly aligned buffer
 
     // Initialize USB hardware
     USB_DeviceInit();
@@ -331,17 +332,46 @@ int main() {
 
         // HID Keyboard Logic: send key change immediately
         if (current_pressed != last_pressed) {
-            // Build report: modifiers=0, reserved=0, keycode in slot 0 (KeyBuf[2])
-            KeyBuf[0] = 0;
-            KeyBuf[1] = 0;
-            KeyBuf[2] = current_pressed;
-            // zero remaining key slots for good measure
-            KeyBuf[3] = KeyBuf[4] = KeyBuf[5] = KeyBuf[6] = KeyBuf[7] = 0;
+            printf("\n=== KEY STATE CHANGE ===\n");
+            printf("Last: 0x%02X, Current: 0x%02X\n", last_pressed, current_pressed);
+            
+            // Build report: NO MODIFIERS, reserved=0, keycode in slot 0 (KeyBuf[2])
+            // CRITICAL: Clear the entire buffer first to prevent garbage/ALT modifier issues
+            memset(KeyBuf, 0, 8);
+            
+            KeyBuf[0] = 0;  // NO modifiers (bit 0=LCtrl, bit 1=LShift, bit 2=LAlt, bit 3=LGui, etc.)
+            KeyBuf[1] = 0;  // Reserved
+            KeyBuf[2] = current_pressed;  // First key slot (0 = no key pressed)
+            // Remaining slots already zeroed by memset
+            
+            printf("KeyBuf prepared: [%02X %02X %02X %02X %02X %02X %02X %02X]\n",
+                KeyBuf[0], KeyBuf[1], KeyBuf[2], KeyBuf[3],
+                KeyBuf[4], KeyBuf[5], KeyBuf[6], KeyBuf[7]);
 
             // Send when EP1 is ready (T endpoint result == NAK -> ready to load/send)
+            uint8_t ep1_ctrl = R8_UEP1_CTRL;
+            printf("EP1_CTRL before: 0x%02X, T_RES: 0x%02X\n", ep1_ctrl, (ep1_ctrl & UEP_T_RES_MASK));
+            
             if ((R8_UEP1_CTRL & UEP_T_RES_MASK) == UEP_T_RES_NAK) {
+                // First, clear EP1_TX_Buf completely
+                memset(EP1_TX_Buf, 0, 8);
+                
+                // Now copy our prepared report
+                for(int i=0; i<8; i++) {
+                    EP1_TX_Buf[i] = KeyBuf[i];
+                }
+                
+                // Verify what we just wrote
+                printf("EP1_TX_Buf after copy: [%02X %02X %02X %02X %02X %02X %02X %02X]\n",
+                    EP1_TX_Buf[0], EP1_TX_Buf[1], EP1_TX_Buf[2], EP1_TX_Buf[3],
+                    EP1_TX_Buf[4], EP1_TX_Buf[5], EP1_TX_Buf[6], EP1_TX_Buf[7]);
+                
                 DevEP1_IN_Transmit(8);
                 flag_did_trasmit = 1;
+                
+                printf(">>> TRANSMISSION INITIATED <<<\n");
+            } else {
+                printf("!!! EP1 NOT READY (not NAK) !!!\n");
             }
             last_pressed = current_pressed;
         }
