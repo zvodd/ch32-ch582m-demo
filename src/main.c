@@ -39,7 +39,7 @@ uint8_t HIDInOutData[DevEP0SIZE] = { 0 }; // Unused, but keep for completeness
 #define TOUCH_THRES 140
 #define TOUCH_BASE_SAMPLES 8
 const uint8_t tkey_ch[] = { 5, 2, 4 };
-const uint8_t key_map[] = { 0x04, 0x05, 0x06 }; // A, B, C
+const uint8_t key_map[] = { 0x50, 0x52, 0x4F }; // A, B, C
 #define NUM_KEYS (sizeof(tkey_ch)/sizeof(tkey_ch[0]))
 uint16_t base_cal[NUM_KEYS] = {0};
 uint8_t KeyBuf[8] = {0, 0, 0, 0, 0, 0, 0, 0}; // Working buffer for keyboard data - fully initialized
@@ -73,7 +73,6 @@ void DevEP1_IN_Transmit(uint16_t len) {
 // ====================================================================
 // === CORE USB ENUMERATION HANDLER (USB_DevTransProcess) ===
 // ====================================================================
-// This function contains the logic you were missing.
 
 void USB_DevTransProcess( void )
 {
@@ -307,6 +306,7 @@ int main() {
     // Enable USB Interrupt
     PFIC_EnableIRQ(USB_IRQn);
 
+    #ifdef DEBUG_MODE
     // Verify DMA pointers are set correctly
     printf("\n\n=== USB DMA POINTER VERIFICATION ===\n");
     printf("EP1_TX_Buf address: 0x%08X\n", (uint32_t)EP1_TX_Buf);
@@ -319,6 +319,7 @@ int main() {
     if (R16_UEP1_DMA != ((uint16_t)(uint32_t)EP1_TX_Buf)) {
         printf("!!! WARNING: R16_UEP1_DMA doesn't point to EP1_TX_Buf !!!\n");
     }
+    #endif //DEBUG_MODE
 
     Touch_Setup();
 
@@ -339,7 +340,9 @@ int main() {
     int flag_did_trasmit = 0;
 
         if (flag_did_trasmit){
+            #ifdef DEBUG_MODE
             printf("\n\nUSB Transmitt occured!\n--------------------------------\n");
+            #endif //DEBUG_MODE
             flag_did_trasmit = 0;
         }
 
@@ -351,12 +354,14 @@ int main() {
         for(int i=0; i<NUM_KEYS; i++) {
             uint16_t val = TouchKey_Get(tkey_ch[i]);
 
+            #ifdef DEBUG_MODE
             // Print the raw values for each channel
             printf("CH%d -)) Base=[ %d ], Current=[ %d ], Diff=[ %d ]\n",
                 tkey_ch[i],
                 base_cal[i],
                 val,
                 (base_cal[i] - val));
+            #endif //DEBUG_MODE
 
             if (val < (base_cal[i] - TOUCH_THRES)) {
                 current_pressed = key_map[i];
@@ -369,8 +374,10 @@ int main() {
 
         // HID Keyboard Logic: send key change immediately
         if (current_pressed != last_pressed) {
+            #ifdef DEBUG_MODE
             printf("\n=== KEY STATE CHANGE ===\n");
             printf("Last: 0x%02X, Current: 0x%02X\n", last_pressed, current_pressed);
+            #endif //DEBUG_MODE
 
             // Build report: NO MODIFIERS, reserved=0, keycode in slot 0 (KeyBuf[2])
             // CRITICAL: Clear the entire buffer first to prevent garbage/ALT modifier issues
@@ -381,32 +388,35 @@ int main() {
             KeyBuf[2] = current_pressed;  // First key slot (0 = no key pressed)
             // Remaining slots already zeroed by memset
 
+            #ifdef DEBUG_MODE
             printf("KeyBuf prepared: [%02X %02X %02X %02X %02X %02X %02X %02X]\n",
                 KeyBuf[0], KeyBuf[1], KeyBuf[2], KeyBuf[3],
                 KeyBuf[4], KeyBuf[5], KeyBuf[6], KeyBuf[7]);
+            #endif //DEBUG_MODE
 
             // Send when EP1 is ready (T endpoint result == NAK -> ready to load/send)
             if ((R8_UEP1_CTRL & UEP_T_RES_MASK) == UEP_T_RES_NAK) {
                 // Copy to EP1_TX_Buf (which now correctly points to IN buffer at offset +64)
                 memcpy(EP1_TX_Buf, KeyBuf, 8);
 
-                // Verify what we wrote
-                printf("EP1_TX_Buf:  [%02X %02X %02X %02X %02X %02X %02X %02X]\n",
-                    EP1_TX_Buf[0], EP1_TX_Buf[1], EP1_TX_Buf[2], EP1_TX_Buf[3],
-                    EP1_TX_Buf[4], EP1_TX_Buf[5], EP1_TX_Buf[6], EP1_TX_Buf[7]);
-
                 DevEP1_IN_Transmit(8);
                 flag_did_trasmit = 1;
 
+                #ifdef DEBUG_MODE
                 printf(">>> TRANSMISSION INITIATED <<<\n");
+                #endif //DEBUG_MODE
             } else {
+                #ifdef DEBUG_MODE
                 printf("!!! EP1 NOT READY (not NAK) !!!\n");
+                #endif //DEBUG_MODE
             }
             last_pressed = current_pressed;
         }
 
         if (flag_did_trasmit){
+            #ifdef DEBUG_MODE
             printf("\n\nUSB Transmitt occured!\n--------------------------------\n");
+            #endif //DEBUG_MODE
             flag_did_trasmit = 0;
         }
 
