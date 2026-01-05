@@ -1,80 +1,58 @@
 # USB HID Keyboard Fix - Summary
 
-## Problems Identified
+## Root Cause Discovered
 
-### 1. **ALT Modifier Being Sent (KEY_RIGHTALT)**
-- **Root Cause**: The `KeyBuf[0]` byte (modifier byte) was not being properly cleared
-- **Effect**: Random garbage data in the modifier byte was being interpreted as ALT key being held
-- **Why it happened**: Buffer reuse without proper clearing between transmissions
+### **USB DMA Buffer Size Mismatch**
 
-### 2. **Key Release Events Never Sent**
-- **Root Cause**: Scanning all 3 touch channels when only 1 was physically connected
-- **Effect**: Unconnected channels (ch5, ch2) returned unstable/garbage ADC values
-- **Why it happened**: The floating inputs on disconnected channels would randomly trigger false "key pressed" states, preventing the logic from ever detecting `current_pressed == 0`
+The CH582M USB peripheral requires **64-byte endpoint buffers** even when only sending 8-byte HID reports.
 
-### 3. **Key Auto-Repeat**
-- **Root Cause**: Combination of above issues - no release event + host OS sees key stuck down
-- **Effect**: Host OS auto-repeat kicks in for the stuck key
+**Original incorrect code:**
+```c
+__attribute__((aligned(4))) uint8_t EP1_Databuf[8 + 8];  // Only 16 bytes!
+#define EP1_TX_Buf (EP1_Databuf)  // Wrong offset
+```
+
+**Problems this caused:**
+1. USB DMA controller expected 64-byte buffers as per hardware design
+2. IN buffer must be at **offset +64** from base address (standard SDK layout)
+3. `R16_UEP1_DMA` was pointing to the wrong memory location
+4. USB hardware was reading **garbage data** from uninitialized memory
+5. This garbage appeared as random modifier keys (ALT, SHIFT, CTRL, etc.)
+
+**Evidence from serial log:**
+```
+KeyBuf prepared: [00 00 04 00 00 00 00 00]  ← Correct data
+EP1_TX_Buf:      [00 00 04 00 00 00 00 00]  ← Written correctly
+DMA buffer:      [2A 83 11 C6 23 00 B3 00]  ← USB reading GARBAGE!
+```
 
 ---
 
-## Fixes Applied
+## Fix Applied
 
-### Fix 1: Buffer Initialization and Clearing
+### Correct Buffer Allocation (Based on WCH SDK Example)
+
 ```c
-// Before:
-uint8_t KeyBuf[8] = {0}; // Compiler might not zero all elements
-
-// After:
-uint8_t KeyBuf[8] = {0, 0, 0, 0, 0, 0, 0, 0}; // Explicit full initialization
-
-// And in the transmission code:
-memset(KeyBuf, 0, 8);  // ALWAYS clear before building new report
+// Correct:
+__attribute__((aligned(4))) uint8_t EP1_Databuf[64 + 64];  // OUT (64) + IN (64)
+#define EP1_TX_Buf (EP1_Databuf + 64)  // IN buffer at offset +64
 ```
 
-**Why this works**: 
-- Ensures NO modifier bits are set (KeyBuf[0] = 0x00 means no Ctrl/Shift/Alt/GUI)
-- Prevents garbage data from previous transmissions
-- USB HID spec requires clean state for unused bytes
+**Why this is required:**
+1. **Hardware requirement**: CH582M USB peripheral DMA expects 64-byte aligned buffers
+2. **SDK standard layout**: OUT buffer at offset 0, IN buffer at offset +64
+3. **16-bit DMA addressing**: `R16_UEP1_DMA` is a 16-bit register that works within the low 64KB address space of RAM
+4. **The `R16_UEP1_DMA` register stores only the lower 16 bits** of the buffer address (works because CH582M RAM is in addressable range)
 
-### Fix 2: Only Scan Connected Touchkey Channel
+**Reference from working SDK example:**
 ```c
-// Before:
-const uint8_t tkey_ch[] = { 5, 2, 4 };      // 3 channels
-const uint8_t key_map[] = { 0x04, 0x05, 0x06 }; // A, B, C keys
-
-// After:
-const uint8_t tkey_ch[] = { 4 };           // Only channel 4
-const uint8_t key_map[] = { 0x06 };        // Only C key
-#define NUM_KEYS (sizeof(tkey_ch)/sizeof(tkey_ch[0]))  // Now = 1
+__attribute__((aligned(4)))  UINT8 EP1_Databuf[64 + 64];    //ep1_out(64)+ep1_in(64)
 ```
 
-**Why this works**:
-- Unconnected ADC channels have floating inputs
-- Floating inputs = unstable readings that can randomly trigger threshold
-- Only scanning the one connected channel ensures deterministic behavior
-- When finger is removed, `current_pressed` correctly becomes 0, triggering release report
-
-### Fix 3: GPIO Configuration
+And SDK header defines:
 ```c
-// Before:
-GPIOA_ModeCfg(GPIO_Pin_12 | GPIO_Pin_14 | GPIO_Pin_15, GPIO_ModeIN_Floating);
-
-// After:
-GPIOA_ModeCfg(GPIO_Pin_15, GPIO_ModeIN_Floating);  // Only Pin_15 (ch4)
-```
-
-**Why this works**:
-- Only configures the pin that's actually used
-- Cleaner hardware configuration
-- Matches the single-channel scanning logic
-
-### Fix 4: Debug Output
-Added debug print to see exactly what's being sent:
-```c
-printf("Sent key report: [%02X %02X %02X %02X %02X %02X %02X %02X]\n",
-    KeyBuf[0], KeyBuf[1], KeyBuf[2], KeyBuf[3],
-    KeyBuf[4], KeyBuf[5], KeyBuf[6], KeyBuf[7]);
+#define pEP1_OUT_DataBuf      (pEP1_RAM_Addr)
+#define pEP1_IN_DataBuf       (pEP1_RAM_Addr + 64)
 ```
 
 ---
@@ -139,12 +117,17 @@ Key Autorepeat: KEY_RIGHTALT
 
 ## Additional Notes
 
+### Key Takeaway
+
+**Always allocate USB endpoint buffers as 64-byte aligned buffers**, even if your actual data is smaller (like 8 bytes for HID keyboard). The USB DMA hardware requires this for proper operation.
+
 ### If You Add More Touchkeys Later:
 1. Physically connect the touchkey to the MCU
 2. Add the channel number to `tkey_ch[]`
 3. Add the desired USB keycode to `key_map[]`
 4. Configure the corresponding GPIO pin in `Touch_Setup()`
 5. Test each key independently
+6. Remember: All touch channels should be physically connected and stable before scanning them
 
 ### USB Keycode Reference:
 - 0x04 = 'A'
@@ -168,7 +151,11 @@ Key Autorepeat: KEY_RIGHTALT
 ## Files Modified
 - `src/main.c` - All fixes applied here
 
+## Summary
+
+The core issue was **incorrect USB endpoint buffer sizing**. The CH582M's USB peripheral requires 64-byte buffers with a specific memory layout (OUT at +0, IN at +64), regardless of actual data size. Our 16-byte allocation caused the DMA to read from uninitialized memory, resulting in garbage data being sent to the host.
+
 ## Date
-- Fix applied: (add current date)
-- Issue: Key stuck down with ALT modifier, no release events
+- Issue discovered: Buffer size mismatch causing garbage USB data
+- Root cause: 16-byte buffer instead of required 64+64 byte layout  
 - Status: ✅ RESOLVED

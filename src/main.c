@@ -10,6 +10,10 @@
 
 
 // --- Global Variables (Adapted for CH582M) ---
+// Extern declarations for USB DMA pointers (defined in SDK's CH58x_usbdev.c)
+extern uint8_t *pEP0_RAM_Addr;
+extern uint8_t *pEP1_RAM_Addr;
+
 uint8_t DevConfig, Ready;
 uint8_t SetupReqCode;
 uint16_t SetupReqLen;
@@ -21,9 +25,9 @@ __attribute__((aligned(4))) uint8_t UsbSetupBuf[8];
 
 // User-allocated RAM (The CH582M has fewer EPs, so we simplify)
 __attribute__((aligned(4))) uint8_t EP0_Databuf[64]; // EP0
-__attribute__((aligned(4))) uint8_t EP1_Databuf[8 + 8]; // EP1 IN (8) + OUT (8) - We only need IN
+__attribute__((aligned(4))) uint8_t EP1_Databuf[64 + 64]; // EP1 OUT (64) + IN (64) - USB requires 64-byte buffers
 uint8_t HIDInOutData[DevEP0SIZE] = { 0 }; // Unused, but keep for completeness
-#define EP1_TX_Buf (EP1_Databuf)  // TX buffer for EP1
+#define EP1_TX_Buf (EP1_Databuf + 64)  // TX buffer for EP1 is at offset +64 (IN buffer)
 
 // --- Helper Functions and Macros ---
 
@@ -303,10 +307,43 @@ int main() {
     // Enable USB Interrupt
     PFIC_EnableIRQ(USB_IRQn);
 
+    // Verify DMA pointers are set correctly
+    printf("\n\n=== USB DMA POINTER VERIFICATION ===\n");
+    printf("EP1_TX_Buf address: 0x%08X\n", (uint32_t)EP1_TX_Buf);
+    printf("R16_UEP1_DMA value: 0x%04X\n", R16_UEP1_DMA);
+    printf("pEP1_RAM_Addr:      0x%08X\n", (uint32_t)pEP1_RAM_Addr);
+
+    if ((uint32_t)EP1_TX_Buf != (uint32_t)pEP1_RAM_Addr) {
+        printf("!!! WARNING: EP1_TX_Buf != pEP1_RAM_Addr !!!\n");
+    }
+    if (R16_UEP1_DMA != ((uint16_t)(uint32_t)EP1_TX_Buf)) {
+        printf("!!! WARNING: R16_UEP1_DMA doesn't point to EP1_TX_Buf !!!\n");
+    }
+
     Touch_Setup();
-    printf("Begin MainLoop");
+
+    // Wait for USB enumeration to complete and send initial "all keys up" report
+    mDelaymS(500);
+    printf("\n=== USB ENUMERATION COMPLETE ===\n");
+    printf("Sending initial 'all keys up' report...\n");
+
+    // Send initial empty report to clear any garbage state on host
+    memset(KeyBuf, 0, 8);
+    memcpy(EP1_TX_Buf, KeyBuf, 8);
+    R8_UEP1_T_LEN = 8;
+    R8_UEP1_CTRL = (R8_UEP1_CTRL & ~UEP_T_RES_MASK) | UEP_T_RES_ACK;
+    mDelaymS(20); // Give time for transmission
+
+    printf("Begin MainLoop\n\n");
 
     int flag_did_trasmit = 0;
+
+        if (flag_did_trasmit){
+            printf("\n\nUSB Transmitt occured!\n--------------------------------\n");
+            flag_did_trasmit = 0;
+        }
+
+        mDelaymS(10);
     while(1) {
         uint8_t current_pressed = 0;
         static uint8_t last_pressed = 0;
@@ -334,41 +371,33 @@ int main() {
         if (current_pressed != last_pressed) {
             printf("\n=== KEY STATE CHANGE ===\n");
             printf("Last: 0x%02X, Current: 0x%02X\n", last_pressed, current_pressed);
-            
+
             // Build report: NO MODIFIERS, reserved=0, keycode in slot 0 (KeyBuf[2])
             // CRITICAL: Clear the entire buffer first to prevent garbage/ALT modifier issues
             memset(KeyBuf, 0, 8);
-            
+
             KeyBuf[0] = 0;  // NO modifiers (bit 0=LCtrl, bit 1=LShift, bit 2=LAlt, bit 3=LGui, etc.)
             KeyBuf[1] = 0;  // Reserved
             KeyBuf[2] = current_pressed;  // First key slot (0 = no key pressed)
             // Remaining slots already zeroed by memset
-            
+
             printf("KeyBuf prepared: [%02X %02X %02X %02X %02X %02X %02X %02X]\n",
                 KeyBuf[0], KeyBuf[1], KeyBuf[2], KeyBuf[3],
                 KeyBuf[4], KeyBuf[5], KeyBuf[6], KeyBuf[7]);
 
             // Send when EP1 is ready (T endpoint result == NAK -> ready to load/send)
-            uint8_t ep1_ctrl = R8_UEP1_CTRL;
-            printf("EP1_CTRL before: 0x%02X, T_RES: 0x%02X\n", ep1_ctrl, (ep1_ctrl & UEP_T_RES_MASK));
-            
             if ((R8_UEP1_CTRL & UEP_T_RES_MASK) == UEP_T_RES_NAK) {
-                // First, clear EP1_TX_Buf completely
-                memset(EP1_TX_Buf, 0, 8);
-                
-                // Now copy our prepared report
-                for(int i=0; i<8; i++) {
-                    EP1_TX_Buf[i] = KeyBuf[i];
-                }
-                
-                // Verify what we just wrote
-                printf("EP1_TX_Buf after copy: [%02X %02X %02X %02X %02X %02X %02X %02X]\n",
+                // Copy to EP1_TX_Buf (which now correctly points to IN buffer at offset +64)
+                memcpy(EP1_TX_Buf, KeyBuf, 8);
+
+                // Verify what we wrote
+                printf("EP1_TX_Buf:  [%02X %02X %02X %02X %02X %02X %02X %02X]\n",
                     EP1_TX_Buf[0], EP1_TX_Buf[1], EP1_TX_Buf[2], EP1_TX_Buf[3],
                     EP1_TX_Buf[4], EP1_TX_Buf[5], EP1_TX_Buf[6], EP1_TX_Buf[7]);
-                
+
                 DevEP1_IN_Transmit(8);
                 flag_did_trasmit = 1;
-                
+
                 printf(">>> TRANSMISSION INITIATED <<<\n");
             } else {
                 printf("!!! EP1 NOT READY (not NAK) !!!\n");
