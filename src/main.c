@@ -10,9 +10,8 @@
 
 
 // --- Global Variables (Adapted for CH582M) ---
-// Extern declarations for USB DMA pointers (defined in SDK's CH58x_usbdev.c)
-extern uint8_t *pEP0_RAM_Addr;
-extern uint8_t *pEP1_RAM_Addr;
+// Extern declarations for USB DMA pointers (see SDK's CH58x_usbdev.c/.h)
+
 
 uint8_t DevConfig, Ready;
 uint8_t SetupReqCode;
@@ -23,10 +22,10 @@ const uint8_t *pDescr;
 __attribute__((aligned(4))) uint8_t UsbSetupBuf[8];
 #define pSetupReqPak ((USB_SETUP_REQ *)UsbSetupBuf)
 
-// User-allocated RAM (The CH582M has fewer EPs, so we simplify)
-__attribute__((aligned(4))) uint8_t EP0_Databuf[64]; // EP0
-__attribute__((aligned(4))) uint8_t EP1_Databuf[64 + 64]; // EP1 OUT (64) + IN (64) - USB requires 64-byte buffers
-uint8_t HIDInOutData[DevEP0SIZE] = { 0 }; // Unused, but keep for completeness
+// User-allocated RAM
+__attribute__((aligned(4)))  uint8_t EP0_Databuf[64];
+__attribute__((aligned(4)))  uint8_t EP1_Databuf[64 + 64];
+
 #define EP1_TX_Buf (EP1_Databuf + 64)  // TX buffer for EP1 is at offset +64 (IN buffer)
 
 // --- Helper Functions and Macros ---
@@ -118,7 +117,10 @@ void USB_DevTransProcess( void )
                 // --- Your Keyboard Endpoint ---
                 case UIS_TOKEN_IN | 1 : // Endpoint 1 IN
                     // Toggle the PID and set back to NAK after sending one packet
-                    R8_UEP1_CTRL ^= RB_UEP_T_TOG;
+                    // --- FIX 2: Do NOT manually toggle if AUTO_TOG is enabled ---
+                    // R8_UEP1_CTRL ^= RB_UEP_T_TOG;  <-- DELETE THIS LINE
+
+                    // Just set it to NAK (and preserve the AUTO_TOG bit)
                     R8_UEP1_CTRL = ( R8_UEP1_CTRL & ~UEP_T_RES_MASK ) | UEP_T_RES_NAK;
                     break;
                 // No need for Endpoint 1 OUT (unless you want LED feedback)
@@ -298,7 +300,7 @@ int main() {
 
     // USB Init
     pEP0_RAM_Addr = EP0_Databuf; // Map EP0 data buffer
-    pEP1_RAM_Addr = EP1_TX_Buf; // Map EP1 TX buffer to properly aligned buffer
+    pEP1_RAM_Addr = EP1_Databuf;
 
     // Initialize USB hardware
     USB_DeviceInit();
@@ -310,6 +312,8 @@ int main() {
     // Verify DMA pointers are set correctly
     printf("\n\n=== USB DMA POINTER VERIFICATION ===\n");
     printf("EP1_TX_Buf address: 0x%08X\n", (uint32_t)EP1_TX_Buf);
+    printf("EP0_Databuf address: 0x%08X\n", (uint32_t)EP0_Databuf);
+    printf("EP1_Databuf address: 0x%08X\n", (uint32_t)EP1_Databuf);
     printf("R16_UEP1_DMA value: 0x%04X\n", R16_UEP1_DMA);
     printf("pEP1_RAM_Addr:      0x%08X\n", (uint32_t)pEP1_RAM_Addr);
 
